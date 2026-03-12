@@ -4,3 +4,4 @@ dist
 coverage
 .env
 postgres_data
+.env.example
