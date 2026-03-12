@@ -13,6 +13,12 @@ import {
 
 type MerchantGroups = Record<string, Merchant[]>;
 
+interface RecommendationAppProps {
+  adminConsoleEnabled?: boolean;
+}
+
+const DEFAULT_MERCHANT_IDS = ["amazon", "seven-eleven"];
+
 function groupMerchantsByCategory(merchants: Merchant[]): MerchantGroups {
   return merchants.reduce<MerchantGroups>((groups, merchant) => {
     const current = groups[merchant.category] ?? [];
@@ -22,10 +28,10 @@ function groupMerchantsByCategory(merchants: Merchant[]): MerchantGroups {
   }, {});
 }
 
-export function RecommendationApp() {
+export function RecommendationApp({ adminConsoleEnabled = false }: RecommendationAppProps) {
   const [monthlySpendYen, setMonthlySpendYen] = useState("80000");
   const [preferredBrands, setPreferredBrands] = useState<CardBrand[]>(["Visa"]);
-  const [selectedMerchantIds, setSelectedMerchantIds] = useState<string[]>(["amazon", "seven-eleven"]);
+  const [selectedMerchantIds, setSelectedMerchantIds] = useState<string[]>(DEFAULT_MERCHANT_IDS);
   const [annualFeeLimit, setAnnualFeeLimit] = useState<string>("10000");
   const [merchants, setMerchants] = useState<Merchant[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
@@ -46,6 +52,16 @@ export function RecommendationApp() {
         }
 
         setMerchants(data.merchants);
+        setSelectedMerchantIds((current) => {
+          const validMerchantIds = new Set(data.merchants.map((merchant) => merchant.id));
+          const retained = current.filter((merchantId) => validMerchantIds.has(merchantId));
+
+          if (retained.length > 0) {
+            return retained;
+          }
+
+          return DEFAULT_MERCHANT_IDS.filter((merchantId) => validMerchantIds.has(merchantId));
+        });
       } catch (error) {
         if (!isCurrent) {
           return;
@@ -118,8 +134,8 @@ export function RecommendationApp() {
           </p>
         </div>
         <div className="hero-note">
-          <p>初期データはサンプルです。</p>
-          <p>管理画面からカード条件と店舗特典を上書きできます。</p>
+          <p>掲載データは運営が管理するカタログです。</p>
+          {adminConsoleEnabled ? <p>管理画面からカード条件と店舗特典を更新できます。</p> : null}
         </div>
       </section>
 
@@ -180,6 +196,10 @@ export function RecommendationApp() {
             <legend>よく使う店舗</legend>
             {isLoadingMerchants ? (
               <p className="inline-status">店舗一覧を読み込み中です。</p>
+            ) : merchants.length === 0 ? (
+              <p className="inline-status">
+                公開用の店舗データがまだ登録されていません。先にカタログを取り込んでください。
+              </p>
             ) : (
               <div className="merchant-groups">
                 {Object.entries(merchantGroups).map(([category, categoryMerchants]) => (

@@ -28,10 +28,14 @@ services:
       NODE_ENV: production
       PORT: 4000
       DATABASE_URL: postgres://${POSTGRES_USER:-creditadmin}:${POSTGRES_PASSWORD:-creditpass}@db:5432/${POSTGRES_DB:-creditcards}
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      ENABLE_ADMIN_CONSOLE: ${ENABLE_ADMIN_CONSOLE:-true}
+      BOOTSTRAP_ADMIN: ${BOOTSTRAP_ADMIN:-true}
+      ENABLE_DEMO_SEED: ${ENABLE_DEMO_SEED:-true}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme123}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-AdminConsoleLocal2026!}
       ADMIN_DISPLAY_NAME: ${ADMIN_DISPLAY_NAME:-Operations Admin}
-      SESSION_SECRET: ${SESSION_SECRET:-dev-secret-change-me}
+      SESSION_SECRET: ${SESSION_SECRET:-local-compose-session-secret-2026!}
     ports:
       - "${BACKEND_HOST_PORT:-4000}:4000"
 
@@ -41,6 +45,7 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         BACKEND_BASE_URL: http://backend:4000
+        ENABLE_ADMIN_CONSOLE: ${ENABLE_ADMIN_CONSOLE:-true}
     restart: unless-stopped
     depends_on:
       backend:
@@ -49,6 +54,7 @@ services:
       NODE_ENV: production
       PORT: 3000
       BACKEND_BASE_URL: http://backend:4000
+      ENABLE_ADMIN_CONSOLE: ${ENABLE_ADMIN_CONSOLE:-true}
     ports:
       - "${FRONTEND_HOST_PORT:-33000}:3000"
 

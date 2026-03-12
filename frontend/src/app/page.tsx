@@ -1,5 +1,6 @@
 import { RecommendationApp } from "@/components/recommendation-app";
+import { isAdminConsoleEnabled } from "@/lib/server-flags";
 
 export default function HomePage() {
-  return <RecommendationApp />;
+  return <RecommendationApp adminConsoleEnabled={isAdminConsoleEnabled()} />;
 }

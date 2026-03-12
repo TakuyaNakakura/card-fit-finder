@@ -170,4 +170,25 @@ describe("RecommendationApp", () => {
     expect(spendInput).toHaveAttribute("min", "1");
     expect(spendInput).toHaveAttribute("step", "1");
   });
+
+  it("shows a catalog setup message when no merchants are available", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          merchants: []
+        }),
+        { status: 200 }
+      )
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RecommendationApp />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("公開用の店舗データがまだ登録されていません。先にカタログを取り込んでください。")
+      ).toBeInTheDocument();
+    });
+  });
 });
