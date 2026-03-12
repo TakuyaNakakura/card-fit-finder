@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createHandlers, writeErrorResponse } from "../src/app.js";
+import { createApp, createHandlers, writeErrorResponse } from "../src/app.js";
+import { LoginAttemptLimiter } from "../src/login-attempts.js";
 import { buildSeededMemoryStore } from "./helpers.js";
 
 function createMockResponse() {
@@ -73,6 +74,39 @@ describe("backend API", () => {
     const response = await invokeHandler(handlers.listAdminCards);
 
     expect(response.statusCode).toBe(401);
+  });
+
+  it("rate limits repeated invalid admin login attempts", async () => {
+    const store = await buildSeededMemoryStore();
+    const handlers = createHandlers({
+      store,
+      sessionSecret: "test-secret",
+      loginAttemptLimiter: new LoginAttemptLimiter(3, 60_000, 60_000)
+    });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await invokeHandler(handlers.adminLogin, {
+        body: {
+          username: "admin",
+          password: "wrong-password"
+        }
+      });
+
+      expect(response.statusCode).toBe(401);
+    }
+
+    const blockedResponse = await invokeHandler(handlers.adminLogin, {
+      body: {
+        username: "admin",
+        password: "wrong-password"
+      }
+    });
+
+    expect(blockedResponse.statusCode).toBe(429);
+    expect(blockedResponse.body).toEqual({
+      message: "Too many login attempts. Try again later."
+    });
+    expect(blockedResponse.headers["retry-after"]).toBe("60");
   });
 
   it("supports admin login and merchant CRUD", async () => {
@@ -326,5 +360,20 @@ describe("backend API", () => {
       message:
         "Unknown merchantId in card import: missing-merchant. Import merchants first or fix the JSON file."
     });
+  });
+
+  it("returns 404 for admin endpoints when the admin console is disabled", async () => {
+    const store = await buildSeededMemoryStore();
+    const app = createApp({
+      store,
+      sessionSecret: "test-secret",
+      adminConsoleEnabled: false
+    });
+    const router = (app as unknown as { _router?: { stack?: Array<{ route?: { path?: string } }> } })._router;
+    const adminLoginRouteExists = router?.stack?.some(
+      (layer) => layer.route?.path === "/api/admin/login"
+    );
+
+    expect(adminLoginRouteExists).toBe(false);
   });
 });

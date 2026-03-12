@@ -1,6 +1,7 @@
 {
   "name": "credit-card-ditection-app",
   "private": true,
+  "packageManager": "npm@10.5.2",
   "workspaces": [
     "frontend",
     "backend"

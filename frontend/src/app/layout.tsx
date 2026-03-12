@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import React, { type ReactNode } from "react";
+import { isAdminConsoleEnabled } from "@/lib/server-flags";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,6 +13,8 @@ export default function RootLayout({
 }: Readonly<{
   children: ReactNode;
 }>) {
+  const adminConsoleEnabled = isAdminConsoleEnabled();
+
   return (
     <html lang="ja">
       <body>
@@ -22,7 +25,7 @@ export default function RootLayout({
           </a>
           <nav className="topnav">
             <a href="/">診断</a>
-            <a href="/admin">管理</a>
+            {adminConsoleEnabled ? <a href="/admin">管理</a> : null}
           </nav>
         </header>
         {children}

@@ -3,6 +3,10 @@ import crypto from "node:crypto";
 const SESSION_COOKIE_NAME = "cc_admin_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 
+interface SessionCookieOptions {
+  secure?: boolean;
+}
+
 interface SessionPayload {
   username: string;
   expiresAt: number;
@@ -105,24 +109,38 @@ export function parseCookieHeader(header: string | undefined): Record<string, st
   }, {});
 }
 
-export function createSessionCookie(token: string): string {
-  return [
+export function createSessionCookie(token: string, options: SessionCookieOptions = {}): string {
+  const attributes = [
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
+    "Priority=High",
     `Max-Age=${SESSION_MAX_AGE_SECONDS}`
-  ].join("; ");
+  ];
+
+  if (options.secure) {
+    attributes.push("Secure");
+  }
+
+  return attributes.join("; ");
 }
 
-export function clearSessionCookie(): string {
-  return [
+export function clearSessionCookie(options: SessionCookieOptions = {}): string {
+  const attributes = [
     `${SESSION_COOKIE_NAME}=`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
+    "Priority=High",
     "Max-Age=0"
-  ].join("; ");
+  ];
+
+  if (options.secure) {
+    attributes.push("Secure");
+  }
+
+  return attributes.join("; ");
 }
 
 export function readSessionToken(cookieHeader: string | undefined): string | undefined {

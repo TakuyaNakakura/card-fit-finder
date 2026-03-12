@@ -1,6 +1,15 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { ZodError, z } from "zod";
 import {
+  cardBrandSchema,
+  ensureUniqueRecordIds,
+  parseCardBody,
+  parseCardImportBody,
+  parseMerchantBody,
+  parseMerchantImportBody,
+  resolveMissingCardImportMerchants
+} from "./catalog-import.js";
+import {
   clearSessionCookie,
   createSessionCookie,
   createSessionToken,
@@ -8,77 +17,9 @@ import {
   verifyPassword,
   verifySessionToken
 } from "./auth.js";
+import { LoginAttemptLimiter } from "./login-attempts.js";
 import { recommendCards } from "./recommendations.js";
-import { CARD_BRANDS, type CardBrand, type CardRecord, type DataStore, type Merchant } from "./types.js";
-import { slugify } from "./utils.js";
-
-const cardBrandSchema = z.enum(CARD_BRANDS);
-const normalizedCardBrandSchema = z.preprocess(
-  (value) => (typeof value === "string" ? normalizeCardBrand(value) : value),
-  cardBrandSchema
-);
-const normalizedMerchantIdSchema = z.preprocess(
-  (value) => (typeof value === "string" ? normalizeMerchantId(value) : value),
-  z.string().min(1)
-);
-
-const CARD_BRAND_ALIASES: Record<string, CardBrand> = {
-  visa: "Visa",
-  mastercard: "Mastercard",
-  "master card": "Mastercard",
-  jcb: "JCB",
-  amex: "Amex",
-  "american express": "Amex"
-};
-
-const MERCHANT_ID_ALIASES: Record<string, string> = {
-  "7-eleven": "seven-eleven",
-  enecos: "eneos",
-  biccamera: "bic-camera"
-};
-
-const IMPORT_MERCHANT_DEFAULTS: Record<string, { name: string; category: string; isActive: boolean }> = {
-  "yahoo-shopping": {
-    name: "Yahoo!ショッピング",
-    category: "EC",
-    isActive: true
-  },
-  jre: {
-    name: "JRE MALL",
-    category: "EC",
-    isActive: true
-  },
-  "target-convenience-and-restaurants": {
-    name: "対象コンビニ・飲食店",
-    category: "優待",
-    isActive: true
-  }
-};
-
-function normalizeCardBrand(value: string): string {
-  const normalized = value.trim();
-  return CARD_BRAND_ALIASES[normalized.toLowerCase()] ?? normalized;
-}
-
-function normalizeMerchantId(value: string): string {
-  const normalized = value.trim();
-  return MERCHANT_ID_ALIASES[normalized.toLowerCase()] ?? normalized;
-}
-
-function buildImportedMerchant(merchantId: string): Merchant | null {
-  const defaults = IMPORT_MERCHANT_DEFAULTS[merchantId];
-
-  if (!defaults) {
-    return null;
-  }
-
-  return {
-    id: merchantId,
-    name: defaults.name,
-    category: defaults.category,
-    isActive: defaults.isActive
-  };
-}
+import { type DataStore } from "./types.js";
 
 const recommendationSchema = z.object({
   monthlySpendYen: z.number().int().positive(),
@@ -87,60 +28,24 @@ const recommendationSchema = z.object({
   annualFeeLimitYen: z.number().int().nonnegative().nullable()
 });
 
-const merchantSchema = z.object({
-  id: z.string().min(1).optional(),
-  name: z.string().min(1),
-  category: z.string().min(1),
-  isActive: z.boolean().default(true)
-});
-
-const merchantBenefitSchema = z.object({
-  merchantId: normalizedMerchantIdSchema,
-  rewardRatePct: z.number().nonnegative(),
-  note: z.string().max(160).default(""),
-  isActive: z.boolean().default(true)
-});
-
-const cardSchema = z.object({
-  id: z.string().min(1).optional(),
-  name: z.string().min(1),
-  issuer: z.string().min(1),
-  description: z.string().min(1),
-  annualFeeYen: z.number().int().nonnegative(),
-  baseRewardRatePct: z.number().nonnegative(),
-  supportedBrands: z.array(normalizedCardBrandSchema).min(1),
-  isActive: z.boolean().default(true),
-  merchantBenefitRates: z.array(merchantBenefitSchema).default([])
-});
-
 const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1)
 });
 
-const merchantImportSchema = z.union([
-  z.array(merchantSchema).min(1),
-  z.object({
-    merchants: z.array(merchantSchema).min(1)
-  })
-]);
-
-const cardImportSchema = z.union([
-  z.array(cardSchema).min(1),
-  z.object({
-    cards: z.array(cardSchema).min(1)
-  })
-]);
-
 export interface AppDependencies {
   store: DataStore;
   sessionSecret: string;
+  secureCookies?: boolean;
+  adminConsoleEnabled?: boolean;
+  loginAttemptLimiter?: LoginAttemptLimiter;
 }
 
 export class HttpError extends Error {
   constructor(
     public readonly statusCode: number,
-    message: string
+    message: string,
+    public readonly headers: Record<string, string> = {}
   ) {
     super(message);
   }
@@ -162,90 +67,18 @@ export interface AppHandlers {
   importAdminCards: (request: Request, response: Response) => Promise<void>;
 }
 
-function ensureUniqueMerchantBenefitRows(card: CardRecord): void {
-  const uniqueMerchantIds = new Set(card.merchantBenefitRates.map((row) => row.merchantId));
+function getClientAddress(request: Request): string {
+  const forwardedFor = request.headers["x-forwarded-for"];
 
-  if (uniqueMerchantIds.size !== card.merchantBenefitRates.length) {
-    throw new HttpError(400, "Merchant benefit rows must be unique by merchantId.");
-  }
-}
-
-function parseMerchantBody(input: unknown): Merchant {
-  const parsed = merchantSchema.parse(input);
-
-  return {
-    id: parsed.id ?? slugify(parsed.name),
-    name: parsed.name,
-    category: parsed.category,
-    isActive: parsed.isActive
-  };
-}
-
-function parseCardBody(input: unknown): CardRecord {
-  const parsed = cardSchema.parse(input);
-  const card: CardRecord = {
-    id: parsed.id ?? slugify(parsed.name),
-    name: parsed.name,
-    issuer: parsed.issuer,
-    description: parsed.description,
-    annualFeeYen: parsed.annualFeeYen,
-    baseRewardRatePct: parsed.baseRewardRatePct,
-    supportedBrands: parsed.supportedBrands,
-    isActive: parsed.isActive,
-    merchantBenefitRates: parsed.merchantBenefitRates
-  };
-
-  ensureUniqueMerchantBenefitRows(card);
-  return card;
-}
-
-function parseMerchantImportBody(input: unknown): Merchant[] {
-  const parsed = merchantImportSchema.parse(input);
-  const merchants = Array.isArray(parsed) ? parsed : parsed.merchants;
-  return merchants.map((merchant) => parseMerchantBody(merchant));
-}
-
-function parseCardImportBody(input: unknown): CardRecord[] {
-  const parsed = cardImportSchema.parse(input);
-  const cards = Array.isArray(parsed) ? parsed : parsed.cards;
-  return cards.map((card) => parseCardBody(card));
-}
-
-function ensureUniqueRecordIds<T extends { id: string }>(records: T[], resourceName: string): void {
-  const seenIds = new Set<string>();
-
-  for (const record of records) {
-    if (seenIds.has(record.id)) {
-      throw new HttpError(400, `${resourceName} import contains duplicate id: ${record.id}`);
-    }
-
-    seenIds.add(record.id);
-  }
-}
-
-function resolveMissingCardImportMerchants(cards: CardRecord[], merchants: Merchant[]): Merchant[] {
-  const merchantIds = new Set(merchants.map((merchant) => merchant.id));
-  const missingMerchants = new Map<string, Merchant>();
-
-  for (const card of cards) {
-    for (const benefit of card.merchantBenefitRates) {
-      if (!merchantIds.has(benefit.merchantId)) {
-        const importedMerchant = buildImportedMerchant(benefit.merchantId);
-
-        if (!importedMerchant) {
-          throw new HttpError(
-            400,
-            `Unknown merchantId in card import: ${benefit.merchantId}. Import merchants first or fix the JSON file.`
-          );
-        }
-
-        missingMerchants.set(importedMerchant.id, importedMerchant);
-        merchantIds.add(importedMerchant.id);
-      }
-    }
+  if (typeof forwardedFor === "string" && forwardedFor.length > 0) {
+    return forwardedFor.split(",")[0]?.trim() || "unknown";
   }
 
-  return Array.from(missingMerchants.values());
+  return request.ip || request.socket?.remoteAddress || "unknown";
+}
+
+function getLoginAttemptKey(request: Request, username: string): string {
+  return `${getClientAddress(request)}:${username.trim().toLowerCase()}`;
 }
 
 async function requireAdmin(
@@ -269,7 +102,12 @@ async function requireAdmin(
   return { username: adminUser.username };
 }
 
-export function createHandlers({ store, sessionSecret }: AppDependencies): AppHandlers {
+export function createHandlers({
+  store,
+  sessionSecret,
+  secureCookies = false,
+  loginAttemptLimiter = new LoginAttemptLimiter()
+}: AppDependencies): AppHandlers {
   return {
     health(_request, response) {
       response.json({ ok: true });
@@ -294,14 +132,32 @@ export function createHandlers({ store, sessionSecret }: AppDependencies): AppHa
 
     async adminLogin(request, response) {
       const input = loginSchema.parse(request.body);
+      const loginAttemptKey = getLoginAttemptKey(request, input.username);
+      const loginAttemptStatus = loginAttemptLimiter.check(loginAttemptKey);
+
+      if (!loginAttemptStatus.allowed) {
+        throw new HttpError(429, "Too many login attempts. Try again later.", {
+          "Retry-After": String(loginAttemptStatus.retryAfterSeconds)
+        });
+      }
+
       const adminUser = await store.findAdminUserByUsername(input.username);
 
       if (!adminUser || !adminUser.isActive || !verifyPassword(input.password, adminUser.passwordHash)) {
+        const failureStatus = loginAttemptLimiter.recordFailure(loginAttemptKey);
+
+        if (!failureStatus.allowed) {
+          throw new HttpError(429, "Too many login attempts. Try again later.", {
+            "Retry-After": String(failureStatus.retryAfterSeconds)
+          });
+        }
+
         throw new HttpError(401, "Invalid admin credentials.");
       }
 
+      loginAttemptLimiter.reset(loginAttemptKey);
       const token = createSessionToken(adminUser.username, sessionSecret);
-      response.setHeader("Set-Cookie", createSessionCookie(token));
+      response.setHeader("Set-Cookie", createSessionCookie(token, { secure: secureCookies }));
       response.json({
         user: {
           username: adminUser.username,
@@ -311,7 +167,7 @@ export function createHandlers({ store, sessionSecret }: AppDependencies): AppHa
     },
 
     adminLogout(_request, response) {
-      response.setHeader("Set-Cookie", clearSessionCookie());
+      response.setHeader("Set-Cookie", clearSessionCookie({ secure: secureCookies }));
       response.status(204).send();
     },
 
@@ -398,6 +254,10 @@ export function writeErrorResponse(error: unknown, response: Response): void {
   }
 
   if (error instanceof HttpError) {
+    for (const [headerName, headerValue] of Object.entries(error.headers)) {
+      response.setHeader(headerName, headerValue);
+    }
+
     response.status(error.statusCode).json({ message: error.message });
     return;
   }
@@ -427,22 +287,40 @@ function asyncRoute(
 export function createApp(dependencies: AppDependencies) {
   const app = express();
   const handlers = createHandlers(dependencies);
+  const adminConsoleEnabled = dependencies.adminConsoleEnabled ?? true;
 
+  app.set("trust proxy", true);
   app.use(express.json());
 
   app.get("/api/health", handlers.health);
   app.get("/api/merchants", asyncRoute(handlers.listMerchants));
   app.post("/api/recommendations", asyncRoute(handlers.postRecommendations));
-  app.post("/api/admin/login", asyncRoute(handlers.adminLogin));
-  app.post("/api/admin/logout", handlers.adminLogout);
-  app.get("/api/admin/merchants", asyncRoute(handlers.listAdminMerchants));
-  app.post("/api/admin/merchants", asyncRoute(handlers.createAdminMerchant));
-  app.put("/api/admin/merchants", asyncRoute(handlers.updateAdminMerchant));
-  app.post("/api/admin/import/merchants", asyncRoute(handlers.importAdminMerchants));
-  app.get("/api/admin/cards", asyncRoute(handlers.listAdminCards));
-  app.post("/api/admin/cards", asyncRoute(handlers.createAdminCard));
-  app.put("/api/admin/cards", asyncRoute(handlers.updateAdminCard));
-  app.post("/api/admin/import/cards", asyncRoute(handlers.importAdminCards));
+
+  if (adminConsoleEnabled) {
+    app.use("/api/admin", (_request, response, next) => {
+      response.setHeader("Cache-Control", "no-store");
+      response.setHeader("Pragma", "no-cache");
+      next();
+    });
+    app.post("/api/admin/login", asyncRoute(handlers.adminLogin));
+    app.post("/api/admin/logout", handlers.adminLogout);
+    app.get("/api/admin/merchants", asyncRoute(handlers.listAdminMerchants));
+    app.post("/api/admin/merchants", asyncRoute(handlers.createAdminMerchant));
+    app.put("/api/admin/merchants", asyncRoute(handlers.updateAdminMerchant));
+    app.post("/api/admin/import/merchants", asyncRoute(handlers.importAdminMerchants));
+    app.get("/api/admin/cards", asyncRoute(handlers.listAdminCards));
+    app.post("/api/admin/cards", asyncRoute(handlers.createAdminCard));
+    app.put("/api/admin/cards", asyncRoute(handlers.updateAdminCard));
+    app.post("/api/admin/import/cards", asyncRoute(handlers.importAdminCards));
+  } else {
+    app.use("/api/admin", (_request, response) => {
+      response.status(404).json({ message: "Not found." });
+    });
+  }
+
+  app.use("/api", (_request, response) => {
+    response.status(404).json({ message: "Not found." });
+  });
 
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
     writeErrorResponse(error, response);
