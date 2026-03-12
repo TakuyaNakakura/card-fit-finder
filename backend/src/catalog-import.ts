@@ -124,7 +124,7 @@ export function parseMerchantBody(input: unknown): Merchant {
   const parsed = merchantSchema.parse(input);
 
   return {
-    id: parsed.id ?? slugify(parsed.name),
+    id: parsed.id ? normalizeMerchantId(parsed.id) : slugify(parsed.name),
     name: parsed.name,
     category: parsed.category,
     isActive: parsed.isActive
