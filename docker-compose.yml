@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-creditcards}
+      POSTGRES_USER: ${POSTGRES_USER:-creditadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-creditpass}
+    ports:
+      - "${POSTGRES_HOST_PORT:-55432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-creditadmin} -d ${POSTGRES_DB:-creditcards}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://${POSTGRES_USER:-creditadmin}:${POSTGRES_PASSWORD:-creditpass}@db:5432/${POSTGRES_DB:-creditcards}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme123}
+      ADMIN_DISPLAY_NAME: ${ADMIN_DISPLAY_NAME:-Operations Admin}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-secret-change-me}
+    ports:
+      - "${BACKEND_HOST_PORT:-4000}:4000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        BACKEND_BASE_URL: http://backend:4000
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      BACKEND_BASE_URL: http://backend:4000
+    ports:
+      - "${FRONTEND_HOST_PORT:-33000}:3000"
+
+volumes:
+  postgres_data:
