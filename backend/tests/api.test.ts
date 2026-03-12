@@ -179,4 +179,152 @@ describe("backend API", () => {
         .isActive
     ).toBe(false);
   });
+
+  it("imports merchants from a JSON payload after login", async () => {
+    const store = await buildSeededMemoryStore();
+    const handlers = createHandlers({ store, sessionSecret: "test-secret" });
+
+    const loginResponse = await invokeHandler(handlers.adminLogin, {
+      body: {
+        username: "admin",
+        password: "password123"
+      }
+    });
+    const sessionCookie = loginResponse.headers["set-cookie"];
+
+    const importResponse = await invokeHandler(handlers.importAdminMerchants, {
+      cookie: Array.isArray(sessionCookie) ? sessionCookie[0] : String(sessionCookie),
+      body: {
+        merchants: [
+          {
+            id: "test-merchant-import",
+            name: "Test Merchant Import",
+            category: "EC",
+            isActive: true
+          }
+        ]
+      }
+    });
+
+    expect(importResponse.statusCode).toBe(200);
+    expect(importResponse.body).toEqual({ importedCount: 1 });
+
+    const listResponse = await invokeHandler(handlers.listAdminMerchants, {
+      cookie: Array.isArray(sessionCookie) ? sessionCookie[0] : String(sessionCookie)
+    });
+    expect(listResponse.statusCode).toBe(200);
+    expect(
+      (listResponse.body as { merchants: Array<{ id: string }> }).merchants.some(
+        (merchant) => merchant.id === "test-merchant-import"
+      )
+    ).toBe(true);
+  });
+
+  it("normalizes brand aliases and known merchant aliases during card import", async () => {
+    const store = await buildSeededMemoryStore();
+    const handlers = createHandlers({ store, sessionSecret: "test-secret" });
+
+    const loginResponse = await invokeHandler(handlers.adminLogin, {
+      body: {
+        username: "admin",
+        password: "password123"
+      }
+    });
+    const sessionCookie = loginResponse.headers["set-cookie"];
+
+    const importResponse = await invokeHandler(handlers.importAdminCards, {
+      cookie: Array.isArray(sessionCookie) ? sessionCookie[0] : String(sessionCookie),
+      body: {
+        cards: [
+          {
+            id: "alias-import-card",
+            name: "Alias Import Card",
+            issuer: "Importer",
+            description: "Uses external aliases",
+            annualFeeYen: 0,
+            baseRewardRatePct: 1.0,
+            supportedBrands: ["Visa", "American Express"],
+            isActive: true,
+            merchantBenefitRates: [
+              {
+                merchantId: "7-eleven",
+                rewardRatePct: 2.0,
+                note: "Alias merchant id",
+                isActive: true
+              },
+              {
+                merchantId: "yahoo-shopping",
+                rewardRatePct: 4.0,
+                note: "Known imported merchant",
+                isActive: true
+              }
+            ]
+          }
+        ]
+      }
+    });
+
+    expect(importResponse.statusCode).toBe(200);
+    expect(importResponse.body).toEqual({ importedCount: 1 });
+
+    const cardsResponse = await invokeHandler(handlers.listAdminCards, {
+      cookie: Array.isArray(sessionCookie) ? sessionCookie[0] : String(sessionCookie)
+    });
+    const importedCard = (cardsResponse.body as { cards: Array<{ id: string; supportedBrands: string[] }> }).cards.find(
+      (card) => card.id === "alias-import-card"
+    );
+    expect(importedCard?.supportedBrands).toEqual(["Visa", "Amex"]);
+
+    const merchantsResponse = await invokeHandler(handlers.listAdminMerchants, {
+      cookie: Array.isArray(sessionCookie) ? sessionCookie[0] : String(sessionCookie)
+    });
+    expect(
+      (merchantsResponse.body as { merchants: Array<{ id: string }> }).merchants.some(
+        (merchant) => merchant.id === "yahoo-shopping"
+      )
+    ).toBe(true);
+  });
+
+  it("rejects card imports with unknown merchant references", async () => {
+    const store = await buildSeededMemoryStore();
+    const handlers = createHandlers({ store, sessionSecret: "test-secret" });
+
+    const loginResponse = await invokeHandler(handlers.adminLogin, {
+      body: {
+        username: "admin",
+        password: "password123"
+      }
+    });
+    const sessionCookie = loginResponse.headers["set-cookie"];
+
+    const importResponse = await invokeHandler(handlers.importAdminCards, {
+      cookie: Array.isArray(sessionCookie) ? sessionCookie[0] : String(sessionCookie),
+      body: [
+        {
+          id: "broken-card-import",
+          name: "Broken Card Import",
+          issuer: "Importer",
+          description: "Should fail",
+          annualFeeYen: 0,
+          baseRewardRatePct: 1.0,
+          supportedBrands: ["Visa"],
+          isActive: true,
+          merchantBenefitRates: [
+            {
+              merchantId: "missing-merchant",
+              rewardRatePct: 3,
+              note: "Invalid reference",
+              isActive: true
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(importResponse.statusCode).toBe(400);
+    expect(importResponse.body).toEqual({
+      message:
+        "Unknown merchantId in card import: missing-merchant. Import merchants first or fix the JSON file."
+    });
+  });
 });

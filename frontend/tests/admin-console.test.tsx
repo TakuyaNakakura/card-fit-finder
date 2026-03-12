@@ -110,4 +110,100 @@ describe("AdminConsole", () => {
       expect(screen.getByText("Test Merchant")).toBeInTheDocument();
     });
   });
+
+  it("imports merchants from a JSON file", async () => {
+    let merchantImportCompleted = false;
+    let merchantFetchCount = 0;
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+
+      if (url === "/api/admin/merchants" && method === "GET") {
+        merchantFetchCount += 1;
+
+        if (merchantFetchCount === 1) {
+          return new Response(JSON.stringify({ message: "Authentication required." }), { status: 401 });
+        }
+
+        return jsonResponse({
+          merchants: merchantImportCompleted
+            ? [
+                {
+                  id: "imported-merchant",
+                  name: "Imported Merchant",
+                  category: "EC",
+                  isActive: true
+                }
+              ]
+            : [],
+          user: {
+            username: "admin",
+            displayName: "Test Admin"
+          }
+        });
+      }
+
+      if (url === "/api/admin/cards" && method === "GET") {
+        return jsonResponse({
+          cards: [],
+          user: {
+            username: "admin",
+            displayName: "Test Admin"
+          }
+        });
+      }
+
+      if (url === "/api/admin/login" && method === "POST") {
+        return jsonResponse({
+          user: {
+            username: "admin",
+            displayName: "Test Admin"
+          }
+        });
+      }
+
+      if (url === "/api/admin/import/merchants" && method === "POST") {
+        merchantImportCompleted = true;
+        return jsonResponse({ importedCount: 1 });
+      }
+
+      return jsonResponse({ message: `Unexpected request: ${method} ${url}` }, 500);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AdminConsole />);
+
+    await screen.findByRole("heading", { name: "管理者ログイン" });
+
+    await userEvent.type(screen.getByLabelText("パスワード"), "password123");
+    await userEvent.click(screen.getByRole("button", { name: "ログイン" }));
+
+    await screen.findByRole("heading", { name: "店舗マスタ" });
+
+    const file = new File(
+      [
+        JSON.stringify({
+          merchants: [
+            {
+              id: "imported-merchant",
+              name: "Imported Merchant",
+              category: "EC",
+              isActive: true
+            }
+          ]
+        })
+      ],
+      "merchants.json",
+      { type: "application/json" }
+    );
+
+    await userEvent.upload(screen.getByLabelText("店舗マスタ JSON"), file);
+    await userEvent.click(screen.getByRole("button", { name: "店舗 JSON を取り込む" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Imported Merchant")).toBeInTheDocument();
+    });
+  });
 });

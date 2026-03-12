@@ -1,6 +1,6 @@
 "use client";
 
-import React, { type FormEvent, useEffect, useState } from "react";
+import React, { type FormEvent, useEffect, useRef, useState } from "react";
 import { fetchJson } from "@/lib/fetch-json";
 import { formatYen } from "@/lib/format";
 import {
@@ -8,6 +8,7 @@ import {
   type AdminCard,
   type AdminUser,
   type CardBrand,
+  type ImportResponse,
   type Merchant,
   type MerchantBenefitRate
 } from "@/lib/types";
@@ -71,13 +72,41 @@ function createCardDraft(card: AdminCard): CardDraft {
   };
 }
 
+async function readJsonFile(file: File): Promise<unknown> {
+  const content =
+    typeof file.text === "function"
+      ? await file.text()
+      : await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+
+          reader.onload = () => {
+            resolve(typeof reader.result === "string" ? reader.result : "");
+          };
+          reader.onerror = () => {
+            reject(new Error(`${file.name} を読み込めませんでした。`));
+          };
+
+          reader.readAsText(file);
+        });
+
+  try {
+    return JSON.parse(content) as unknown;
+  } catch {
+    throw new Error(`${file.name} は有効な JSON ファイルではありません。`);
+  }
+}
+
 export function AdminConsole() {
+  const merchantImportInputRef = useRef<HTMLInputElement | null>(null);
+  const cardImportInputRef = useRef<HTMLInputElement | null>(null);
   const [authState, setAuthState] = useState<"checking" | "logged-out" | "logged-in">("checking");
   const [currentUser, setCurrentUser] = useState<AdminUser | null>(null);
   const [merchants, setMerchants] = useState<Merchant[]>([]);
   const [cards, setCards] = useState<AdminCard[]>([]);
   const [loginUsername, setLoginUsername] = useState("admin");
   const [loginPassword, setLoginPassword] = useState("");
+  const [merchantImportFile, setMerchantImportFile] = useState<File | null>(null);
+  const [cardImportFile, setCardImportFile] = useState<File | null>(null);
   const [merchantDraft, setMerchantDraft] = useState<MerchantDraft>(EMPTY_MERCHANT_DRAFT);
   const [cardDraft, setCardDraft] = useState<CardDraft>(EMPTY_CARD_DRAFT);
   const [selectedMerchantId, setSelectedMerchantId] = useState<string | null>(null);
@@ -85,6 +114,7 @@ export function AdminConsole() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [activeImportType, setActiveImportType] = useState<"merchants" | "cards" | null>(null);
 
   async function loadProtectedData(): Promise<void> {
     setErrorMessage(null);
@@ -128,6 +158,24 @@ export function AdminConsole() {
   function resetCardDraft(): void {
     setSelectedCardId(null);
     setCardDraft(EMPTY_CARD_DRAFT);
+  }
+
+  function clearImportSelection(importType: "merchants" | "cards"): void {
+    if (importType === "merchants") {
+      setMerchantImportFile(null);
+
+      if (merchantImportInputRef.current) {
+        merchantImportInputRef.current.value = "";
+      }
+
+      return;
+    }
+
+    setCardImportFile(null);
+
+    if (cardImportInputRef.current) {
+      cardImportInputRef.current.value = "";
+    }
   }
 
   function toggleCardBrand(brand: CardBrand): void {
@@ -254,6 +302,66 @@ export function AdminConsole() {
     }
   }
 
+  async function handleMerchantImport(): Promise<void> {
+    if (!merchantImportFile) {
+      setErrorMessage("店舗マスタ JSON ファイルを選択してください。");
+      setStatusMessage(null);
+      return;
+    }
+
+    setErrorMessage(null);
+    setStatusMessage(null);
+    setActiveImportType("merchants");
+
+    try {
+      const payload = await readJsonFile(merchantImportFile);
+      const result = await fetchJson<ImportResponse>("/api/admin/import/merchants", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+
+      await loadProtectedData();
+      clearImportSelection("merchants");
+      resetMerchantDraft();
+      setStatusMessage(`${result.importedCount} 件の店舗を取り込みました。`);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "店舗マスタの取り込みに失敗しました。");
+    } finally {
+      setActiveImportType(null);
+    }
+  }
+
+  async function handleCardImport(): Promise<void> {
+    if (!cardImportFile) {
+      setErrorMessage("カードカタログ JSON ファイルを選択してください。");
+      setStatusMessage(null);
+      return;
+    }
+
+    setErrorMessage(null);
+    setStatusMessage(null);
+    setActiveImportType("cards");
+
+    try {
+      const payload = await readJsonFile(cardImportFile);
+      const result = await fetchJson<ImportResponse>("/api/admin/import/cards", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+
+      await loadProtectedData();
+      clearImportSelection("cards");
+      resetCardDraft();
+      setStatusMessage(`${result.importedCount} 件のカードを取り込みました。`);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "カードカタログの取り込みに失敗しました。"
+      );
+    } finally {
+      setActiveImportType(null);
+    }
+  }
+
   if (authState === "checking") {
     return (
       <main className="page-shell admin-shell">
@@ -335,6 +443,43 @@ export function AdminConsole() {
             </button>
           </div>
 
+          <div className="import-box">
+            <div className="panel-heading compact-heading">
+              <h3>JSON インポート</h3>
+              <p>配列、または `merchants` キー付きの JSON を取り込みます。</p>
+            </div>
+
+            <label className="field">
+              <span>店舗マスタ JSON</span>
+              <input
+                ref={merchantImportInputRef}
+                type="file"
+                accept=".json,application/json"
+                onChange={(event) => setMerchantImportFile(event.target.files?.[0] ?? null)}
+              />
+            </label>
+
+            <div className="import-actions">
+              <p className="inline-status">
+                {merchantImportFile
+                  ? `選択中: ${merchantImportFile.name}`
+                  : "JSON ファイルを選択してください。"}
+              </p>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={activeImportType === "merchants" || !merchantImportFile}
+                onClick={() => void handleMerchantImport()}
+              >
+                {activeImportType === "merchants" ? "取り込み中..." : "店舗 JSON を取り込む"}
+              </button>
+            </div>
+
+            <p className="inline-status">
+              形式例: <code>[...]</code> または <code>{'{ "merchants": [...] }'}</code>
+            </p>
+          </div>
+
           <div className="catalog-list">
             {merchants.map((merchant) => (
               <button
@@ -411,6 +556,46 @@ export function AdminConsole() {
             <button className="secondary-button" type="button" onClick={resetCardDraft}>
               新規
             </button>
+          </div>
+
+          <div className="import-box">
+            <div className="panel-heading compact-heading">
+              <h3>JSON インポート</h3>
+              <p>配列、または `cards` キー付きの JSON を取り込みます。</p>
+            </div>
+
+            <label className="field">
+              <span>カードカタログ JSON</span>
+              <input
+                ref={cardImportInputRef}
+                type="file"
+                accept=".json,application/json"
+                onChange={(event) => setCardImportFile(event.target.files?.[0] ?? null)}
+              />
+            </label>
+
+            <div className="import-actions">
+              <p className="inline-status">
+                {cardImportFile
+                  ? `選択中: ${cardImportFile.name}`
+                  : "JSON ファイルを選択してください。"}
+              </p>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={activeImportType === "cards" || !cardImportFile}
+                onClick={() => void handleCardImport()}
+              >
+                {activeImportType === "cards" ? "取り込み中..." : "カード JSON を取り込む"}
+              </button>
+            </div>
+
+            <p className="inline-status">
+              形式例: <code>[...]</code> または <code>{'{ "cards": [...] }'}</code>
+            </p>
+            <p className="inline-status">
+              店舗別優待に使う `merchantId` は、先に店舗マスタへ取り込んでおく必要があります。
+            </p>
           </div>
 
           <div className="catalog-list card-catalog-list">

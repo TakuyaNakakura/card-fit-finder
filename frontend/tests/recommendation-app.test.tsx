@@ -151,4 +151,23 @@ describe("RecommendationApp", () => {
       ).toBeInTheDocument();
     });
   });
+
+  it("allows integer yen amounts without step mismatch", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          merchants: [{ id: "amazon", name: "Amazon", category: "EC", isActive: true }]
+        }),
+        { status: 200 }
+      )
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RecommendationApp />);
+
+    const spendInput = await screen.findByLabelText("月額利用額");
+    expect(spendInput).toHaveAttribute("min", "1");
+    expect(spendInput).toHaveAttribute("step", "1");
+  });
 });

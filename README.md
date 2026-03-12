@@ -48,7 +48,68 @@ The app can start without a `.env` file. Copy `.env.example` to `.env` only when
 - App: [http://localhost:33000](http://localhost:33000)
 - Backend API: [http://localhost:4000/api/health](http://localhost:4000/api/health)
 
+## JSON Import
+Admin Console supports JSON file import for merchants and cards.
+
+- Merchant import endpoint: `POST /api/admin/import/merchants`
+- Card import endpoint: `POST /api/admin/import/cards`
+- Both endpoints accept either a bare array or an object wrapper.
+
+Merchant file examples:
+
+```json
+[
+  {
+    "id": "amazon",
+    "name": "Amazon",
+    "category": "EC",
+    "isActive": true
+  }
+]
+```
+
+```json
+{
+  "merchants": [
+    {
+      "id": "amazon",
+      "name": "Amazon",
+      "category": "EC",
+      "isActive": true
+    }
+  ]
+}
+```
+
+Card file example:
+
+```json
+{
+  "cards": [
+    {
+      "id": "sample-card",
+      "name": "Sample Card",
+      "issuer": "Sample Bank",
+      "description": "Imported from JSON",
+      "annualFeeYen": 0,
+      "baseRewardRatePct": 1.2,
+      "supportedBrands": ["Visa", "JCB"],
+      "isActive": true,
+      "merchantBenefitRates": [
+        {
+          "merchantId": "amazon",
+          "rewardRatePct": 2.4,
+          "note": "EC bonus",
+          "isActive": true
+        }
+      ]
+    }
+  ]
+}
+```
+
 ## Notes
 - Seed data is illustrative demo data, not live card program data.
 - The frontend proxies `/api/*` requests to the backend service through Next.js rewrites.
 - If host ports conflict with local services, override `POSTGRES_HOST_PORT`, `BACKEND_HOST_PORT`, or `FRONTEND_HOST_PORT`.
+- Importing cards requires referenced `merchantId` values to already exist in the merchant master.

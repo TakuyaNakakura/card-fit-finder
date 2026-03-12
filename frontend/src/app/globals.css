@@ -436,6 +436,29 @@ textarea {
   gap: 18px;
 }
 
+.import-box {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px dashed rgba(24, 34, 45, 0.16);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.import-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.inline-status code {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(24, 34, 45, 0.08);
+  color: var(--text);
+}
+
 .catalog-list {
   display: grid;
   gap: 10px;
@@ -531,7 +554,8 @@ textarea {
 
   .hero-panel,
   .recommendation-header,
-  .panel-heading-inline {
+  .panel-heading-inline,
+  .import-actions {
     flex-direction: column;
   }
 

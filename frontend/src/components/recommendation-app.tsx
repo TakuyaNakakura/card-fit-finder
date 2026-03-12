@@ -135,7 +135,7 @@ export function RecommendationApp() {
             <input
               type="number"
               min="1"
-              step="1000"
+              step="1"
               value={monthlySpendYen}
               onChange={(event) => setMonthlySpendYen(event.target.value)}
               placeholder="80000"

@@ -54,6 +54,10 @@ export interface AdminUser {
   displayName: string;
 }
 
+export interface ImportResponse {
+  importedCount: number;
+}
+
 export const ANNUAL_FEE_OPTIONS = [
   { value: "0", label: "無料のみ" },
   { value: "5000", label: "5,000円以下" },
